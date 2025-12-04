@@ -59,6 +59,8 @@ class RTTView(QWidget):
         
         uic.loadUi('RTTView.ui', self)
 
+        self.hWidget2.setVisible(False)
+
         self.tblVar.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
 
         self.Vars = {}  # {name: Variable}
@@ -119,8 +121,9 @@ class RTTView(QWidget):
             self.conf.set('display', 'ncurve', '4')     # max curve number supported
             self.conf.set('display', 'npoint', '1000')
 
-            self.conf.add_section('history')
-            self.conf.set('history', 'hist1', '11 22 33 AA BB CC')
+            self.conf.add_section('others')
+            self.conf.set('others', 'history', '11 22 33 AA BB CC')
+            self.conf.set('others', 'savfile', os.path.join(os.getcwd(), 'rtt_data.txt'))
 
         self.cmbICode.setCurrentIndex(zero_if(self.cmbICode.findText(self.conf.get('encode', 'input'))))
         self.cmbOCode.setCurrentIndex(zero_if(self.cmbOCode.findText(self.conf.get('encode', 'output'))))
@@ -129,7 +132,9 @@ class RTTView(QWidget):
         self.N_CURVE = int(self.conf.get('display', 'ncurve'), 10)
         self.N_POINT = int(self.conf.get('display', 'npoint'), 10)
 
-        self.txtSend.setPlainText(self.conf.get('history', 'hist1'))
+        self.linFile.setText(self.conf.get('others', 'savfile'))
+
+        self.txtSend.setPlainText(self.conf.get('others', 'history'))
 
     def initQwtPlot(self):
         self.PlotData  = [[0]*self.N_POINT for i in range(self.N_CURVE)]
@@ -190,7 +195,10 @@ class RTTView(QWidget):
                     self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
                 
                 if self.chkSave.isChecked():
-                    self.rcvfile = open(datetime.datetime.now().strftime("rcv_%y%m%d%H%M%S.txt"), 'w')
+                    savfile, ext = os.path.splitext(self.linFile.text())
+                    savfile = f'{savfile}_{datetime.datetime.now().strftime("%y%m%d%H%M%S")}{ext}'
+
+                    self.rcvfile = open(savfile, 'w')
 
                 if re.match(r'0[xX][0-9a-fA-F]{8}', self.cmbAddr.currentText()):
                     addr = int(self.cmbAddr.currentText(), 16)
@@ -232,6 +240,7 @@ class RTTView(QWidget):
                 self.cmbDLL.setEnabled(False)
                 self.btnDLL.setEnabled(False)
                 self.cmbAddr.setEnabled(False)
+                self.chkSave.setEnabled(False)
                 self.btnOpen.setText('关闭连接')
 
         else:
@@ -243,6 +252,7 @@ class RTTView(QWidget):
             self.cmbDLL.setEnabled(True)
             self.btnDLL.setEnabled(True)
             self.cmbAddr.setEnabled(True)
+            self.chkSave.setEnabled(True)
             self.btnOpen.setText('打开连接')
     
     def aUpRead(self):
@@ -482,6 +492,16 @@ class RTTView(QWidget):
             self.gLayout2.addWidget(self.tblVar, 0, 0, 5, 2)
             self.tblVar.setVisible(True)
 
+    @pyqtSlot(int)
+    def on_chkSave_stateChanged(self, state):
+        self.hWidget2.setVisible(state == Qt.Checked)
+    
+    @pyqtSlot()
+    def on_btnFile_clicked(self):
+        savfile, filter = QFileDialog.getSaveFileName(caption='数据保存文件路径', filter='文本文件 (*.txt)', directory=self.linFile.text())
+        if savfile:
+            self.linFile.setText(savfile)
+
     def parse_elffile(self, path):
         try:
             from elftools.elf.elffile import ELFFile
@@ -595,7 +615,8 @@ class RTTView(QWidget):
         self.conf.set('encode', 'input',  self.cmbICode.currentText())
         self.conf.set('encode', 'output', self.cmbOCode.currentText())
         self.conf.set('encode', 'oenter', self.cmbEnter.currentText())
-        self.conf.set('history', 'hist1', self.txtSend.toPlainText())
+        self.conf.set('others', 'history', self.txtSend.toPlainText())
+        self.conf.set('others', 'savfile', self.linFile.text())
 
         addrs = [self.cmbAddr.currentText()] + [self.cmbAddr.itemText(i) for i in range(self.cmbAddr.count())]
         self.conf.set('link',   'address', repr(list(collections.OrderedDict.fromkeys(addrs))))   # 保留顺序去重
