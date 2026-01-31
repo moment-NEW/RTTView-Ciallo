@@ -7,6 +7,7 @@ import struct
 import datetime
 import collections
 import configparser
+import time
 
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import pyqtSlot, pyqtSignal, Qt
@@ -16,6 +17,8 @@ from PyQt5.QtChart import QChart, QChartView, QLineSeries
 import jlink
 import xlink
 
+# 强制使用 CMSIS-DAP v2 (WinUSB) 后端，以尝试与 Keil 共享连接
+os.environ['PYOCD_USB_BACKEND'] = 'pyusb_v2'
 
 os.environ['PATH'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'libusb-1.0.24/MinGW64/dll') + os.pathsep + os.environ['PATH']
 
@@ -149,19 +152,35 @@ class RTTView(QWidget):
         self.PlotCurve = [QLineSeries() for i in range(self.N_CURVE)]
 
     def daplink_detect(self):
+        if self.btnOpen.text() == '关闭连接':
+            return
+        
         try:
             from pyocd.probe import aggregator
             self.daplinks = aggregator.DebugProbeAggregator.get_all_connected_probes()
         except Exception as e:
             self.daplinks = []
 
-        if len(self.daplinks) != self.cmbDLL.count() - 2:
-            for i in range(2, self.cmbDLL.count()):
+        # 检查是否真的需要刷新列表（通过比较数量和数据，避免无谓的 removeItem 导致 UI 索引重置）
+        # 这里的 cmbDLL.count() - 2 是因为前两个是固定的 J-Link 和 OpenOCD
+        if len(self.daplinks) * 2 != self.cmbDLL.count() - 2:
+            # 记录当前选中的文本，以便刷新后恢复
+            current_text = self.cmbDLL.currentText()
+            
+            # 清除原有的 DAP-Link 项（从索引 2 开始）
+            while self.cmbDLL.count() > 2:
                 self.cmbDLL.removeItem(2)
 
+            # 重新添加
             for i, daplink in enumerate(self.daplinks):
                 self.cmbDLL.addItem(f'{daplink.product_name} ({daplink.unique_id})', i)
-    
+                self.cmbDLL.addItem(f'[Shared] {daplink.product_name} ({daplink.unique_id})', f'shared_{i}')
+            
+            # 关键：尝试恢复刷新前的选择，防止跳转到索引 0 或 1 (J-Link/OpenOCD)
+            index = self.cmbDLL.findText(current_text)
+            if index != -1:
+                self.cmbDLL.setCurrentIndex(index)
+
     @pyqtSlot()
     def on_btnOpen_clicked(self):
         if self.btnOpen.text() == '打开连接':
@@ -179,8 +198,54 @@ class RTTView(QWidget):
                     import openocd
                     self.xlk = xlink.XLink(openocd.OpenOCD(mode=mode, core=core, speed=speed))
                 
+                elif str(item_data).startswith('shared_'):
+                    from pyocd.coresight import dap, ap, cortex_m
+                    from pyocd.probe.debug_probe import DebugProbe
+                    
+                    os.environ['PYOCD_USB_BACKEND'] = 'pyusb_v2'
+                    idx = int(item_data.split('_')[1])
+                    daplink = self.daplinks[idx]
+                    
+                    if getattr(daplink, 'is_open', False):
+                        try: daplink.close()
+                        except: pass
+                    
+                    daplink.open()
+                    try:
+                        daplink.connect(DebugProbe.Protocol.SWD)
+                    except:
+                        pass
+
+                    _dp = dap.DebugPort(daplink, None)
+                    # 共享模式下尽量静默，仅在必要时初始化
+                    _dp.set_clock(speed * 1000) 
+
+                    _ap = ap.AHB_AP(_dp, 0)
+                    
+                    # 共享模式关键：强制失效 SELECT 寄存器缓存，防止与 Keil 冲突
+                    if hasattr(daplink, '_invalidate_cached_registers'):
+                        daplink._invalidate_cached_registers()
+
+                    # 尝试读取 IDR 确认连接，增加重试以应对竞争
+                    _ap.idr = 0
+                    for i in range(3):
+                        try:
+                            _ap.idr = _ap.read_reg(ap.AP_IDR)
+                            if _ap.idr: break
+                        except:
+                            time.sleep(0.05)
+                            if hasattr(daplink, '_invalidate_cached_registers'):
+                                daplink._invalidate_cached_registers()
+
+                    self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
+                    self.txtMain.append(f'\n[DAP-Link Shared Mode] {daplink.product_name} 开启成功。\n')
+
                 else:
                     from pyocd.coresight import dap, ap, cortex_m
+                    # 普通模式：恢复默认后端并执行标准初始化
+                    if 'PYOCD_USB_BACKEND' in os.environ:
+                        del os.environ['PYOCD_USB_BACKEND']
+                    
                     daplink = self.daplinks[item_data]
                     daplink.open()
 
@@ -203,6 +268,7 @@ class RTTView(QWidget):
                 if re.match(r'0[xX][0-9a-fA-F]{8}', self.cmbAddr.currentText()):
                     addr = int(self.cmbAddr.currentText(), 16)
                     for i in range(64):
+                        self.xlk_invalidate_cache()
                         data = self.xlk.read_mem_U8(addr + 1024 * i, 1024 + 32) # 多读32字节，防止搜索内容在边界处
                         index = bytes(data).find(b'SEGGER RTT')
                         if index != -1:
@@ -227,14 +293,12 @@ class RTTView(QWidget):
 
             except Exception as e:
                 self.txtMain.append(f'\nerror: {str(e)}\n')
-
-                try:
-                    self.xlk.close()
-                except:
-                    try:
-                        daplink.close()
-                    except:
-                        pass
+                if 'daplink' in locals():
+                    try: daplink.close()
+                    except: pass
+                if hasattr(self, 'xlk') and self.xlk:
+                    try: self.xlk.close()
+                    except: pass
 
             else:
                 self.cmbDLL.setEnabled(False)
@@ -264,7 +328,21 @@ class RTTView(QWidget):
             self.chkSave.setEnabled(True)
             self.btnOpen.setText('打开连接')
     
+    def xlk_invalidate_cache(self):
+        # 共享模式关键：由于 Keil 会修改 DP SELECT 寄存器，我们必须让 pyocd 失效相关缓存
+        # 否则 RTTView 会读写错误的 AP/Bank。
+        if hasattr(self, 'xlk') and hasattr(self.xlk, 'xlk') and hasattr(self.xlk.xlk, 'ap'):
+            probe = getattr(self.xlk.xlk.ap.dp, 'link', None)
+            if probe and hasattr(probe, '_invalidate_cached_registers'):
+                probe._invalidate_cached_registers()
+
     def aUpRead(self):
+        if isinstance(self.xlk, RawTCPLink):
+            return self.xlk.recv()
+
+        # 针对 DAP-Link 共享模式，每次读写前强制失效 SELECT 寄存器缓存，防止与 Keil 冲突
+        self.xlk_invalidate_cache()
+
         data = self.xlk.read_mem_U8(self.aUpAddr, ctypes.sizeof(RingBuffer))
 
         aUp = RingBuffer.from_buffer(bytearray(data))
@@ -285,9 +363,16 @@ class RTTView(QWidget):
         else:
             data = []
         
+        # 共享模式礼让
+        if '[Shared]' in self.cmbDLL.currentText():
+            time.sleep(0.005)
+
         return bytes(data)
 
     def aDownWrite(self, bytes):
+        # 针对 DAP-Link 共享模式，写操作前同样需要失效 SELECT 缓存
+        self.xlk_invalidate_cache()
+
         data = self.xlk.read_mem_U8(self.aDownAddr, ctypes.sizeof(RingBuffer))
 
         aDown = RingBuffer.from_buffer(bytearray(data))
@@ -313,6 +398,11 @@ class RTTView(QWidget):
     def on_tmrRTT_timeout(self):
         self.tmrRTT_Cnt += 1
         if self.btnOpen.text() == '关闭连接':
+            # 共享模式下，“深度礼让”：降低频率至 1/5 (每 50ms 访问一次)
+            is_shared = '[Shared]' in self.cmbDLL.currentText()
+            if is_shared and self.tmrRTT_Cnt % 5 != 0:
+                return
+
             try:
                 if self.rtt_cb:
                     rcvdbytes = self.aUpRead()
@@ -321,18 +411,25 @@ class RTTView(QWidget):
                     vals = []
                     for name, addr, size, typ, fmt, show in self.Vals.values():
                         if show:
+                            self.xlk_invalidate_cache()
                             buf = self.xlk.read_mem_U8(addr, size)
                             vals.append(struct.unpack(fmt, bytes(buf))[0])
+                            if is_shared: time.sleep(0.002) # 变量读取间隙
+                    
+                    if is_shared: time.sleep(0.005) # 完成一轮读取后的礼让
 
                     rcvdbytes = b'\t'.join(f'{val}'.encode() for val in vals) + b',\n'
             
             except Exception as e:
                 rcvdbytes = b''
-                if self.tmrRTT_Cnt % 10 == 0:  # 连续多次尝试失败
-                    self.txtMain.append(f'\n通信中断: {str(e)}\n')
-                    self.on_btnOpen_clicked()  # 触发关闭逻辑
-                    QtWidgets.QMessageBox.critical(self, "连接断开", f"与调试器通信失败: {str(e)}")
-                    return
+                # 共享模式下，不打印“通信异常”以免干扰 UI
+                threshold = 100 if is_shared else 10
+                if self.tmrRTT_Cnt % threshold == 0:
+                    if not is_shared:
+                        self.txtMain.append(f'\n通信异常: {str(e)}\n')
+                        self.on_btnOpen_clicked() 
+                        QtWidgets.QMessageBox.critical(self, "连接断开", f"与调试器通信失败: {str(e)}")
+                        return
 
             if rcvdbytes:
                 if self.rcvfile and not self.rcvfile.closed:
