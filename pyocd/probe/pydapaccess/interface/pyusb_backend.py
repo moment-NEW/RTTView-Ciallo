@@ -144,7 +144,10 @@ class PyUSB(Interface):
             while not self.closed:
                 self.read_sem.acquire()
                 if not self.closed:
-                    self.rcv_data.append(self.ep_in.read(self.ep_in.wMaxPacketSize, 10 * 1000))
+                    try:
+                        self.rcv_data.append(self.ep_in.read(self.ep_in.wMaxPacketSize, 10 * 1000))
+                    except usb.core.USBError as exc:
+                        self.rcv_data.append(exc)
         finally:
             # Set last element of rcv_data to None on exit
             self.rcv_data.append(None)
@@ -206,10 +209,13 @@ class PyUSB(Interface):
         while len(self.rcv_data) == 0:
             sleep(0)
 
-        if self.rcv_data[0] is None:
+        data = self.rcv_data.pop(0)
+        if data is None:
             raise DAPAccessIntf.DeviceError("Device %s read thread exited" %
                                             self.serial_number)
-        return self.rcv_data.pop(0)
+        if isinstance(data, Exception):
+            raise six.raise_from(DAPAccessIntf.DeviceError("USB Access Error"), data)
+        return data
 
     def set_packet_count(self, count):
         # No interface level restrictions on count

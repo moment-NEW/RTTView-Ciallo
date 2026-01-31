@@ -147,7 +147,10 @@ class PyUSBv2(Interface):
             while not self.rx_stop_event.is_set():
                 self.read_sem.acquire()
                 if not self.rx_stop_event.is_set():
-                    self.rcv_data.append(self.ep_in.read(self.ep_in.wMaxPacketSize, 10 * 1000))
+                    try:
+                        self.rcv_data.append(self.ep_in.read(self.ep_in.wMaxPacketSize, 10 * 1000))
+                    except usb.core.USBError as exc:
+                        self.rcv_data.append(exc)
         finally:
             # Set last element of rcv_data to None on exit
             self.rcv_data.append(None)
@@ -205,9 +208,12 @@ class PyUSBv2(Interface):
         while len(self.rcv_data) == 0:
             sleep(0)
 
-        if self.rcv_data[0] is None:
+        data = self.rcv_data.pop(0)
+        if data is None:
             raise DAPAccessIntf.DeviceError("Device %s read thread exited unexpectedly" % self.serial_number)
-        return self.rcv_data.pop(0)
+        if isinstance(data, Exception):
+            raise six.raise_from(DAPAccessIntf.DeviceError("USB Access Error"), data)
+        return data
 
     def read_swo(self):
         # Accumulate all available SWO data.

@@ -247,7 +247,16 @@ class RTTView(QWidget):
             if self.rcvfile and not self.rcvfile.closed:
                 self.rcvfile.close()
 
-            self.xlk.close()
+            try:
+                self.xlk.close()
+            except:
+                pass
+
+            self.cmbDLL.setEnabled(True)
+            self.btnDLL.setEnabled(True)
+            self.cmbAddr.setEnabled(True)
+            self.chkSave.setEnabled(True)
+            self.btnOpen.setText('打开连接')
 
             self.cmbDLL.setEnabled(True)
             self.btnDLL.setEnabled(True)
@@ -319,6 +328,11 @@ class RTTView(QWidget):
             
             except Exception as e:
                 rcvdbytes = b''
+                if self.tmrRTT_Cnt % 10 == 0:  # 连续多次尝试失败
+                    self.txtMain.append(f'\n通信中断: {str(e)}\n')
+                    self.on_btnOpen_clicked()  # 触发关闭逻辑
+                    QtWidgets.QMessageBox.critical(self, "连接断开", f"与调试器通信失败: {str(e)}")
+                    return
 
             if rcvdbytes:
                 if self.rcvfile and not self.rcvfile.closed:
@@ -509,8 +523,58 @@ class RTTView(QWidget):
 
             self.Vars = {}
             for sym in elffile.get_section_by_name('.symtab').iter_symbols():
-                if sym.entry['st_info']['type'] == 'STT_OBJECT' and sym.entry['st_size'] in (1, 2, 4, 8):
+                if sym.entry['st_info']['type'] == 'STT_OBJECT':
                     self.Vars[sym.name] = Variable(sym.name, sym.entry['st_value'], sym.entry['st_size'])
+
+            if elffile.has_dwarf_info():
+                dwarfinfo = elffile.get_dwarf_info()
+
+                def get_type_die(die):
+                    while 'DW_AT_type' in die.attributes:
+                        die = die.get_DIE_from_attribute('DW_AT_type')
+                        if die.tag not in ('DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type'):
+                            return die
+                    return None
+
+                def parse_struct(die, addr, name):
+                    for child in die.iter_children():
+                        if child.tag == 'DW_TAG_member':
+                            if 'DW_AT_name' not in child.attributes or 'DW_AT_data_member_location' not in child.attributes:
+                                continue
+                            m_name = child.attributes['DW_AT_name'].value.decode('utf-8')
+                            m_off = child.attributes['DW_AT_data_member_location'].value
+                            if not isinstance(m_off, int):
+                                if isinstance(m_off, list) and len(m_off) > 1 and m_off[0] == 0x23:
+                                    val, shift, i = 0, 0, 1
+                                    while i < len(m_off):
+                                        byte = m_off[i]
+                                        val |= (byte & 0x7F) << shift
+                                        i += 1
+                                        if not (byte & 0x80): break
+                                        shift += 7
+                                    m_off = val
+                                else:
+                                    m_off = 0
+                            
+                            t_die = get_type_die(child)
+                            if t_die:
+                                size = t_die.attributes['DW_AT_byte_size'].value if 'DW_AT_byte_size' in t_die.attributes else 0
+                                f_name = f"{name}.{m_name}"
+                                if size in (1, 2, 4, 8):
+                                    self.Vars[f_name] = Variable(f_name, addr + m_off, size)
+                                if t_die.tag == 'DW_TAG_structure_type':
+                                    parse_struct(t_die, addr + m_off, f_name)
+
+                for CU in dwarfinfo.iter_CUs():
+                    for die in CU.get_top_DIE().iter_children():
+                        if die.tag == 'DW_TAG_variable' and 'DW_AT_name' in die.attributes:
+                            v_name = die.attributes['DW_AT_name'].value.decode('utf-8')
+                            if v_name in self.Vars:
+                                t_die = get_type_die(die)
+                                if t_die and t_die.tag == 'DW_TAG_structure_type':
+                                    parse_struct(t_die, self.Vars[v_name].addr, v_name)
+
+            self.Vars = {k: v for k, v in self.Vars.items() if v.size in (1, 2, 4, 8)}
 
         except Exception as e:
             print(f'parse elf file fail: {e}')
@@ -633,8 +697,12 @@ class VarDialog(QDialog):
     def __init__(self, parent, row):
         super(VarDialog, self).__init__(parent)
 
-        self.resize(400, 100)
-        self.setWindowTitle('VarDialog')
+        self.resize(400, 150)
+        self.setWindowTitle('选择变量')
+
+        self.linSearch = QtWidgets.QLineEdit(self)
+        self.linSearch.setPlaceholderText('输入关键字搜索变量...')
+        self.linSearch.textChanged.connect(self.on_linSearch_textChanged)
 
         self.cmbType = QtWidgets.QComboBox(self)
         self.cmbType.setMinimumSize(QtCore.QSize(80, 0))
@@ -655,18 +723,32 @@ class VarDialog(QDialog):
         self.btnBox.rejected.connect(self.reject)
         
         self.vLayout = QtWidgets.QVBoxLayout(self)
+        self.vLayout.addWidget(QtWidgets.QLabel('搜索：', self))
+        self.vLayout.addWidget(self.linSearch)
         self.vLayout.addLayout(self.hLayout)
         self.vLayout.addItem(QtWidgets.QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
         self.vLayout.addWidget(self.btnBox)
 
-        self.cmbName.addItems(parent.Vars.keys())
+        self.all_vars = sorted(parent.Vars.keys())
+        self.cmbName.addItems(self.all_vars)
 
         if parent.tblVar.item(row, 0):
             self.cmbName.setCurrentText(parent.tblVar.item(row, 0).text())
             self.cmbType.setCurrentText(parent.tblVar.item(row, 2).text())
 
     @pyqtSlot(str)
+    def on_linSearch_textChanged(self, text):
+        self.cmbName.clear()
+        if not text:
+            self.cmbName.addItems(self.all_vars)
+        else:
+            filtered = [v for v in self.all_vars if text.lower() in v.lower()]
+            self.cmbName.addItems(filtered)
+
+    @pyqtSlot(str)
     def on_cmbName_currentTextChanged(self, name):
+        if not name or name not in self.parent().Vars:
+            return
         size = self.parent().Vars[name].size
 
         self.cmbType.clear()

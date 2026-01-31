@@ -18,7 +18,7 @@
    </sizepolicy>
   </property>
   <property name="windowTitle">
-   <string>SEGGER-RTT Viewer</string>
+   <string>Ciallo-SEGGER-RTT Viewer</string>
   </property>
   <property name="windowIcon">
    <iconset>
