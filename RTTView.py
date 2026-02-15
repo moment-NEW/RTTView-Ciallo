@@ -111,6 +111,7 @@ class RTTView(QWidget):
         self.cmbDLL.addItem(self.conf.get('link', 'jlink'), 'jlink')
         self.cmbDLL.addItem('OpenOCD Tcl RPC (6666)', 'openocd')
         self.cmbDLL.addItem('Keil uVision COM', 'keil')
+        self.cmbDLL.addItem('AGDI Proxy (DAP Hook)', 'agdi')
         self.daplink_detect()    # add DAPLink
 
         self.cmbDLL.setCurrentIndex(zero_if(self.cmbDLL.findText(self.conf.get('link', 'select'))))
@@ -208,6 +209,13 @@ class RTTView(QWidget):
                     self.xlk = xlink.XLink(keil.Keil())
                     self.xlk.open(mode, core, speed)
                     self.txtMain.append(f'\n[Keil uVision COM] 连接成功。\n')
+
+                elif item_data == 'agdi':
+                    import agdi_receiver
+                    self.receiver = agdi_receiver.AGDIReceiver()
+                    self.receiver.start()
+                    self.xlk = xlink.XLink(agdi_receiver.AGDILink(self.receiver))
+                    self.txtMain.append(f'\n[AGDI Proxy] 监听已启动 (Port 9999)。请确保 Keil 已加载 Proxy DLL。\n')
 
                 elif str(item_data).startswith('shared_'):
                     from pyocd.coresight import dap, ap, cortex_m

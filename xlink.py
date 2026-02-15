@@ -8,6 +8,7 @@ import threading
 import jlink
 import openocd
 import keil
+import agdi_receiver
 
 
 class XLink(object):
@@ -15,7 +16,7 @@ class XLink(object):
         self.xlk = xlk
         self.lock = threading.Lock()
 
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.reg_add_alias()
 
     def locked(func):
@@ -26,7 +27,7 @@ class XLink(object):
 
     @locked
     def open(self, mode, core, speed):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.open(mode, core, speed)
 
             self.reg_add_alias()
@@ -88,42 +89,42 @@ class XLink(object):
 
     @property
     def mode(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.mode
         else:
             return 'arm'
     
     @locked
     def write_U8(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_U8(addr, val)
         else:
             self.xlk.write8(addr, val)
 
     @locked
     def write_U16(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_U16(addr, val)
         else:
             self.xlk.write16(addr, val)
 
     @locked
     def write_U32(self, addr, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_U32(addr, val)
         else:
             self.xlk.write32(addr, val)
 
     @locked
     def write_mem_U8(self, addr, data):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_mem_U8(addr, data)
         else:
             self.xlk.write_memory_block8(addr, data)
 
     @locked
     def write_mem_U32(self, addr, data):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_mem_U32(addr, data)
         else:
             self.xlk.write_memory_block32(addr, data)
@@ -134,49 +135,49 @@ class XLink(object):
 
     @locked
     def read_mem_U8(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.read_mem_U8(addr, count)
         else:
             return self.xlk.read_memory_block8(addr, count)
 
     @locked
     def read_mem_U16(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.read_mem_U16(addr, count)
         else:
             return [self.xlk.read16(addr+i*2) for i in range(count)]
 
     @locked
     def read_mem_U32(self, addr, count):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.read_mem_U32(addr, count)
         else:
             return self.xlk.read_memory_block32(addr, count)
 
     @locked
     def read_U32(self, addr):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.read_U32(addr)
         else:
             return self.xlk.read32(addr)
 
     @locked
     def read_reg(self, reg):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.read_reg(reg.lower())
         else:
             return self.xlk.read_core_register_raw(reg)
 
     @locked
     def read_regs(self, rlist):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return dict(zip(rlist, self.xlk.read_regs([reg.lower() for reg in rlist]).values()))
         else:
             return dict(zip(rlist, self.xlk.read_core_registers_raw(rlist)))
 
     @locked
     def write_reg(self, reg, val):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.write_reg(reg.lower(), val)
         else:
             self.xlk.write_core_register_raw(reg, val)
@@ -200,21 +201,21 @@ class XLink(object):
 
     @locked
     def go(self):
-        if isinstance(self.xlk, (jlink.JLink, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.go()
         else:
             self.xlk.resume()
 
     @locked
     def halted(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             return self.xlk.halted()
         else:
             return self.xlk.is_halted()
 
     @locked
     def close(self):
-        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil)):
+        if isinstance(self.xlk, (jlink.JLink, openocd.OpenOCD, keil.Keil, agdi_receiver.AGDILink)):
             self.xlk.close()
         else:
             self.xlk.ap.dp.link.close()
@@ -293,7 +294,7 @@ class XLink(object):
         if isinstance(self.xlk, openocd.OpenOCD):
             self.xlk.reset(halt=True)
 
-        elif isinstance(self.xlk, (jlink.JLink, keil.Keil)):
+        elif isinstance(self.xlk, (jlink.JLink, keil.Keil, agdi_receiver.AGDILink)):
             if self.mode.startswith('rv'):
                 self.xlk.reset()
 
