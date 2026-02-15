@@ -16,6 +16,7 @@ from PyQt5.QtChart import QChart, QChartView, QLineSeries
 
 import jlink
 import xlink
+import gdbserver
 
 # 强制使用 CMSIS-DAP v2 (WinUSB) 后端，以尝试与 Keil 共享连接
 os.environ['PYOCD_USB_BACKEND'] = 'pyusb_v2'
@@ -78,6 +79,8 @@ class RTTView(QWidget):
 
         self.elffile = None
         
+        self.gdb = None
+
         self.tmrRTT = QtCore.QTimer()
         self.tmrRTT.setInterval(10)
         self.tmrRTT.timeout.connect(self.on_tmrRTT_timeout)
@@ -100,12 +103,14 @@ class RTTView(QWidget):
             self.conf.set('link', 'select', '')
             self.conf.set('link', 'address', '["0x20000000"]')
             self.conf.set('link', 'variable', '{}')
+            self.conf.set('link', 'gdbserver', '2331')
 
         self.cmbMode.setCurrentIndex(zero_if(self.cmbMode.findText(self.conf.get('link', 'mode'))))
         self.cmbSpeed.setCurrentIndex(zero_if(self.cmbSpeed.findText(self.conf.get('link', 'speed'))))
 
         self.cmbDLL.addItem(self.conf.get('link', 'jlink'), 'jlink')
         self.cmbDLL.addItem('OpenOCD Tcl RPC (6666)', 'openocd')
+        self.cmbDLL.addItem('Keil uVision COM', 'keil')
         self.daplink_detect()    # add DAPLink
 
         self.cmbDLL.setCurrentIndex(zero_if(self.cmbDLL.findText(self.conf.get('link', 'select'))))
@@ -198,6 +203,12 @@ class RTTView(QWidget):
                     import openocd
                     self.xlk = xlink.XLink(openocd.OpenOCD(mode=mode, core=core, speed=speed))
                 
+                elif item_data == 'keil':
+                    import keil
+                    self.xlk = xlink.XLink(keil.Keil())
+                    self.xlk.open(mode, core, speed)
+                    self.txtMain.append(f'\n[Keil uVision COM] 连接成功。\n')
+
                 elif str(item_data).startswith('shared_'):
                     from pyocd.coresight import dap, ap, cortex_m
                     from pyocd.probe.debug_probe import DebugProbe
@@ -259,6 +270,11 @@ class RTTView(QWidget):
 
                     self.xlk = xlink.XLink(cortex_m.CortexM(None, _ap))
                 
+                if hasattr(self, 'xlk') and self.xlk:
+                    port = int(self.conf.get('link', 'gdbserver', fallback='2331'))
+                    self.gdb = gdbserver.GDBServer(self.xlk, port)
+                    self.gdb.start()
+
                 if self.chkSave.isChecked():
                     savfile, ext = os.path.splitext(self.linFile.text())
                     savfile = f'{savfile}_{datetime.datetime.now().strftime("%y%m%d%H%M%S")}{ext}'
@@ -310,6 +326,10 @@ class RTTView(QWidget):
         else:
             if self.rcvfile and not self.rcvfile.closed:
                 self.rcvfile.close()
+
+            if self.gdb:
+                self.gdb.stop()
+                self.gdb = None
 
             try:
                 self.xlk.close()
